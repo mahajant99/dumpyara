@@ -36,7 +36,7 @@ else
     [[ -e "$URL" ]] || { echo "Invalid Input" && exit 1; }
 fi
 
-ORG=AndroidDumps #your GitHub org name
+ORG=mahajant99 #your GitHub org name
 FILE=$(echo ${URL##*/} | inline-detox)
 EXTENSION=$(echo ${URL##*.} | inline-detox)
 UNZIP_DIR=${FILE/.$EXTENSION/}
@@ -192,10 +192,10 @@ if [[ -n $GIT_OAUTH_TOKEN ]]; then
     curl --silent --fail "https://raw.githubusercontent.com/$ORG/$repo/$branch/all_files.txt" 2> /dev/null && echo "Firmware already dumped!" && exit 1
     git init
     if [[ -z "$(git config --get user.email)" ]]; then
-        git config user.email AndroidDumps@github.com
+        git config user.email mahajant99@github.com
     fi
     if [[ -z "$(git config --get user.name)" ]]; then
-        git config user.name AndroidDumps
+        git config user.name mahajant99
     fi
     git checkout -b "$branch"
     find . -size +97M -printf '%P\n' -o -name "*sensetime*" -printf '%P\n' -o -name "*.lic" -printf '%P\n' >| .gitignore
@@ -225,25 +225,4 @@ if [[ -n $GIT_OAUTH_TOKEN ]]; then
 else
     echo "Dump done locally."
     exit 1
-fi
-
-# Telegram channel
-TG_TOKEN=$(< "$PROJECT_DIR"/.tgtoken)
-if [[ -n "$TG_TOKEN" ]]; then
-    CHAT_ID="@android_dumps"
-    commit_head=$(git log --format=format:%H | head -n 1)
-    commit_link="https://github.com/$ORG/$repo/commit/$commit_head"
-    echo -e "Sending telegram notification"
-    printf "<b>Brand: %s</b>" "$brand" >| "$PROJECT_DIR"/working/tg.html
-    {
-        printf "\n<b>Device: %s</b>" "$codename"
-        printf "\n<b>Version:</b> %s" "$release"
-        printf "\n<b>Fingerprint:</b> %s" "$fingerprint"
-        printf "\n<b>GitHub:</b>"
-        printf "\n<a href=\"%s\">Commit</a>" "$commit_link"
-        printf "\n<a href=\"https://github.com/%s/%s/tree/%s/\">%s</a>" "$ORG" "$repo" "$branch" "$codename"
-    } >> "$PROJECT_DIR"/working/tg.html
-    TEXT=$(< "$PROJECT_DIR"/working/tg.html)
-    curl -s "https://api.telegram.org/bot${TG_TOKEN}/sendmessage" --data "text=${TEXT}&chat_id=${CHAT_ID}&parse_mode=HTML&disable_web_page_preview=True" > /dev/null
-    rm -rf "$PROJECT_DIR"/working/tg.html
 fi
