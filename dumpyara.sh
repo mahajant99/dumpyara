@@ -11,6 +11,19 @@ PROJECT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 # Create input & working directory if it does not exist
 mkdir -p "$PROJECT_DIR"/input "$PROJECT_DIR"/working
 
+# Determine which command to use for privilege escalation
+if command -v sudo > /dev/null 2>&1; then
+    sudo_cmd="sudo"
+elif command -v doas > /dev/null 2>&1; then
+    sudo_cmd="doas"
+else
+    echo "Neither sudo nor doas found. Please install one of them."
+    exit 1
+fi
+
+# Activate virtual environment
+source .venv/bin/activate
+
 # GitHub token
 if [[ -n $2 ]]; then
     GIT_OAUTH_TOKEN=$2
@@ -29,7 +42,10 @@ if echo "$1" | grep -e '^\(https\?\|ftp\)://.*$' > /dev/null; then
         URL=$1
     fi
     cd "$PROJECT_DIR"/input || exit
-    { type -p aria2c > /dev/null 2>&1 && printf "Downloading File...\n" && aria2c -x16 -j"$(nproc)" "${URL}"; } || { printf "Downloading File...\n" && wget -q --show-progress --progress=bar:force "${URL}" || exit 1; }
+    { type -p aria2c > /dev/null 2>&1 && printf "Downloading File...\n" && aria2c -x16 -j"$(nproc)" "${URL}"; } || { printf "Downloading File...\n" && wget -q --content-disposition --show-progress --progress=bar:force "${URL}" || exit 1; }
+    if [[ ! -f "$(echo ${URL##*/} | inline-detox)" ]]; then
+        URL=$(wget --server-response --spider "${URL}" 2>&1 | awk -F"filename=" '{print $2}')
+    fi
     detox "${URL##*/}"
 else
     URL=$(printf "%s\n" "$1")
@@ -40,7 +56,7 @@ ORG=mahajant99 #your GitHub org name
 FILE=$(echo ${URL##*/} | inline-detox)
 EXTENSION=$(echo ${URL##*.} | inline-detox)
 UNZIP_DIR=${FILE/.$EXTENSION/}
-PARTITIONS="system systemex system_ext system_other vendor cust odm odm_ext oem factory product modem xrom oppo_product opproduct reserve india my_preload my_odm my_stock my_operator my_country my_product my_company my_engineering my_heytap my_custom my_manifest my_carrier my_region my_bigball my_version special_preload vendor_dlkm odm_dlkm"
+PARTITIONS="system systemex system_ext system_other vendor cust odm odm_ext oem factory product modem xrom oppo_product opproduct reserve india my_preload my_odm my_stock my_operator my_country my_product my_company my_engineering my_heytap my_custom my_manifest my_carrier my_region my_bigball my_version special_preload vendor_dlkm odm_dlkm system_dlkm mi_ext"
 
 if [[ -d "$1" ]]; then
     echo 'Directory detected. Copying...'
@@ -117,12 +133,12 @@ for p in $PARTITIONS; do
                     rm -fv "$p".img > /dev/null 2>&1
                 else
                     echo "Couldn't extract $p partition by fsck.erofs. Using mount loop"
-                    sudo mount -o loop -t auto "$p".img "$p"
+                    $sudo_cmd mount -o loop -t auto "$p".img "$p"
                     mkdir "${p}_"
-                    sudo cp -rf "${p}/"* "${p}_"
-                    sudo umount "${p}"
-                    sudo cp -rf "${p}_/"* "${p}"
-                    sudo rm -rf "${p}_"
+                    $sudo_cmd cp -rf "${p}/"* "${p}_"
+                    $sudo_cmd umount "${p}"
+                    $sudo_cmd cp -rf "${p}_/"* "${p}"
+                    $sudo_cmd rm -rf "${p}_"
                     if [ $? -eq 0 ]; then
                         rm -fv "$p".img > /dev/null 2>&1
                     else
@@ -137,8 +153,8 @@ for p in $PARTITIONS; do
 done
 
 # Fix permissions
-sudo chown "$(whoami)" "$PROJECT_DIR"/working/"${UNZIP_DIR}"/./* -fR
-sudo chmod -fR u+rwX "$PROJECT_DIR"/working/"${UNZIP_DIR}"/./*
+$sudo_cmd chown "$(whoami)" "$PROJECT_DIR"/working/"${UNZIP_DIR}"/./* -fR
+$sudo_cmd chmod -fR u+rwX "$PROJECT_DIR"/working/"${UNZIP_DIR}"/./*
 
 # board-info.txt
 find "$PROJECT_DIR"/working/"${UNZIP_DIR}"/modem -type f -exec strings {} \; | grep "QC_IMAGE_VERSION_STRING=MPSS." | sed "s|QC_IMAGE_VERSION_STRING=MPSS.||g" | cut -c 4- | sed -e 's/^/require version-baseband=/' >> "$PROJECT_DIR"/working/"${UNZIP_DIR}"/board-info.txt
@@ -157,6 +173,7 @@ flavor=$(grep -oP "(?<=^ro.build.flavor=).*" -hs {system,system/system,vendor}/b
 release=$(grep -oP "(?<=^ro.build.version.release=).*" -hs {system,system/system,vendor}/build*.prop)
 [[ -z "${release}" ]] && release=$(grep -oP "(?<=^ro.vendor.build.version.release=).*" -hs vendor/build*.prop)
 [[ -z "${release}" ]] && release=$(grep -oP "(?<=^ro.system.build.version.release=).*" -hs {system,system/system}/build*.prop)
+release=`echo "$release" | head -1`
 id=$(grep -oP "(?<=^ro.build.id=).*" -hs {system,system/system,vendor}/build*.prop)
 [[ -z "${id}" ]] && id=$(grep -oP "(?<=^ro.vendor.build.id=).*" -hs vendor/build*.prop)
 [[ -z "${id}" ]] && id=$(grep -oP "(?<=^ro.system.build.id=).*" -hs {system,system/system}/build*.prop)
@@ -169,23 +186,30 @@ tags=$(grep -oP "(?<=^ro.build.tags=).*" -hs {system,system/system,vendor}/build
 platform=$(grep -oP "(?<=^ro.board.platform=).*" -hs {system,system/system,vendor}/build*.prop)
 [[ -z "${platform}" ]] && platform=$(grep -oP "(?<=^ro.vendor.board.platform=).*" -hs vendor/build*.prop)
 [[ -z "${platform}" ]] && platform=$(grep -oP "(?<=^ro.system.board.platform=).*" -hs {system,system/system}/build*.prop)
-manufacturer=$(grep -oP "(?<=^ro.product.manufacturer=).*" -hs {system,system/system,vendor}/build*.prop)
+manufacturer=$(grep -oP "(?<=^ro.product.odm.manufacturer=).*" -hs odm/etc/build*.prop)
+[[ -z "${manufacturer}" ]] && manufacturer=$(grep -oP "(?<=^ro.product.manufacturer=).*" -hs {system,system/system,vendor}/build*.prop)
 [[ -z "${manufacturer}" ]] && manufacturer=$(grep -oP "(?<=^ro.vendor.product.manufacturer=).*" -hs vendor/build*.prop)
 [[ -z "${manufacturer}" ]] && manufacturer=$(grep -oP "(?<=^ro.system.product.manufacturer=).*" -hs {system,system/system}/build*.prop)
-fingerprint=$(grep -oP "(?<=^ro.build.fingerprint=).*" -hs {system,system/system,vendor}/build*.prop)
+[[ -z "${manufacturer}" ]] && manufacturer=$(grep -oP "(?<=^ro.product.vendor.manufacturer=).*" -hs vendor/build*.prop)
+[[ -z "${manufacturer}" ]] && manufacturer=$(grep -oP "(?<=^ro.product.system.manufacturer=).*" -hs {system,system/system}/build*.prop)
+fingerprint=$(grep -oP "(?<=^ro.odm.build.fingerprint=).*" -hs odm/etc/*build*.prop)
+[[ -z "${fingerprint}" ]] && fingerprint=$(grep -oP "(?<=^ro.build.fingerprint=).*" -hs {system,system/system,vendor}/build*.prop)
 [[ -z "${fingerprint}" ]] && fingerprint=$(grep -oP "(?<=^ro.vendor.build.fingerprint=).*" -hs vendor/build*.prop)
 [[ -z "${fingerprint}" ]] && fingerprint=$(grep -oP "(?<=^ro.system.build.fingerprint=).*" -hs {system,system/system}/build*.prop)
-brand=$(grep -oP "(?<=^ro.product.brand=).*" -hs {system,system/system,vendor}/build*.prop | head -1)
-[[ -z "${brand}" ]] && brand=$(grep -oP "(?<=^ro.product.vendor.brand=).*" -hs vendor/build*.prop | head -1)
-[[ -z "${brand}" ]] && brand=$(grep -oP "(?<=^ro.vendor.product.brand=).*" -hs vendor/build*.prop | head -1)
-[[ -z "${brand}" ]] && brand=$(grep -oP "(?<=^ro.product.system.brand=).*" -hs {system,system/system}/build*.prop | head -1)
-[[ -z "${brand}" ]] && brand=$(echo "$fingerprint" | cut -d / -f1)
-codename=$(grep -oP "(?<=^ro.product.device=).*" -hs {system,system/system,vendor}/build*.prop | head -1)
+codename=$(grep -oP "(?<=^ro.product.odm.device=).*" -hs odm/etc/build*.prop | head -1)
+[[ -z "${codename}" ]] && codename=$(grep -oP "(?<=^ro.product.device=).*" -hs {vendor,system,system/system}/build*.prop | head -1)
 [[ -z "${codename}" ]] && codename=$(grep -oP "(?<=^ro.product.vendor.device=).*" -hs vendor/build*.prop | head -1)
 [[ -z "${codename}" ]] && codename=$(grep -oP "(?<=^ro.vendor.product.device=).*" -hs vendor/build*.prop | head -1)
 [[ -z "${codename}" ]] && codename=$(grep -oP "(?<=^ro.product.system.device=).*" -hs {system,system/system}/build*.prop | head -1)
 [[ -z "${codename}" ]] && codename=$(echo "$fingerprint" | cut -d / -f3 | cut -d : -f1)
 [[ -z "${codename}" ]] && codename=$(grep -oP "(?<=^ro.build.fota.version=).*" -hs {system,system/system}/build*.prop | cut -d - -f1 | head -1)
+brand=$(grep -oP "(?<=^ro.product.odm.brand=).*" -hs odm/etc/${codename}_build.prop | head -1)
+[[ -z "${brand}" ]] && brand=$(grep -oP "(?<=^ro.product.odm.brand=).*" -hs odm/etc/build*.prop | head -1)
+[[ -z "${brand}" ]] && brand=$(grep -oP "(?<=^ro.product.brand=).*" -hs {vendor,system,system/system}/build*.prop | head -1)
+[[ -z "${brand}" ]] && brand=$(grep -oP "(?<=^ro.product.vendor.brand=).*" -hs vendor/build*.prop | head -1)
+[[ -z "${brand}" ]] && brand=$(grep -oP "(?<=^ro.vendor.product.brand=).*" -hs vendor/build*.prop | head -1)
+[[ -z "${brand}" ]] && brand=$(grep -oP "(?<=^ro.product.system.brand=).*" -hs {system,system/system}/build*.prop | head -1)
+[[ -z "${brand}" ]] && brand=$(echo "$fingerprint" | cut -d / -f1)
 description=$(grep -oP "(?<=^ro.build.description=).*" -hs {system,system/system,vendor}/build*.prop)
 [[ -z "${description}" ]] && description=$(grep -oP "(?<=^ro.vendor.build.description=).*" -hs vendor/build*.prop)
 [[ -z "${description}" ]] && description=$(grep -oP "(?<=^ro.system.build.description=).*" -hs {system,system/system}/build*.prop)
@@ -220,6 +244,7 @@ chmod -R u+rwX ./* #ensure final permissions
 find "$PROJECT_DIR"/working/"${UNZIP_DIR}" -type f -printf '%P\n' | sort | grep -v ".git/" > "$PROJECT_DIR"/working/"${UNZIP_DIR}"/all_files.txt
 
 if [[ -n $GIT_OAUTH_TOKEN ]]; then
+    GITPUSH=(git push https://"$GIT_OAUTH_TOKEN"@github.com/$ORG/"${repo,,}".git "$branch")
     curl --silent --fail "https://raw.githubusercontent.com/$ORG/$repo/$branch/all_files.txt" 2> /dev/null && echo "Firmware already dumped!" && exit 1
     git init
     if [[ -z "$(git config --get user.email)" ]]; then
@@ -228,31 +253,31 @@ if [[ -n $GIT_OAUTH_TOKEN ]]; then
     if [[ -z "$(git config --get user.name)" ]]; then
         git config user.name mahajant99
     fi
-    git checkout -b "$branch"
-    find . -size +97M -printf '%P\n' -o -name "*sensetime*" -printf '%P\n' -o -name "*.lic" -printf '%P\n' >| .gitignore
-    git add --all
-
     curl -s -X POST -H "Authorization: token ${GIT_OAUTH_TOKEN}" -d '{ "name": "'"$repo"'" }' "https://api.github.com/orgs/${ORG}/repos" #create new repo
     curl -s -X PUT -H "Authorization: token ${GIT_OAUTH_TOKEN}" -H "Accept: application/vnd.github.mercy-preview+json" -d '{ "names": ["'"$manufacturer"'","'"$platform"'","'"$top_codename"'"]}' "https://api.github.com/repos/${ORG}/${repo}/topics"
     git remote add origin https://github.com/$ORG/"${repo,,}".git
+    git checkout -b "$branch"
+    find . -size +97M -printf '%P\n' -o -name "*sensetime*" -printf '%P\n' -o -name "*.lic" -printf '%P\n' >| .gitignore
+    git add --all
     git commit -asm "Add ${description}"
-    git push https://"$GIT_OAUTH_TOKEN"@github.com/$ORG/"${repo,,}".git "$branch" ||
-        (
-            git update-ref -d HEAD
-            git reset system/ vendor/
-            git checkout -b "$branch"
-            git commit -asm "Add extras for ${description}"
-            git push https://"$GIT_OAUTH_TOKEN"@github.com/$ORG/"${repo,,}".git "$branch"
-            git add vendor/
-            git commit -asm "Add vendor for ${description}"
-            git push https://"$GIT_OAUTH_TOKEN"@github.com/$ORG/"${repo,,}".git "$branch"
-            git add system/system/app/ system/system/priv-app/ || git add system/app/ system/priv-app/
-            git commit -asm "Add apps for ${description}"
-            git push https://"$GIT_OAUTH_TOKEN"@github.com/$ORG/"${repo,,}".git "$branch"
-            git add system/
-            git commit -asm "Add system for ${description}"
-            git push https://"$GIT_OAUTH_TOKEN"@github.com/$ORG/"${repo,,}".git "$branch"
-        )
+    git update-ref -d HEAD
+    git reset system/ vendor/ product/
+    git checkout -b "$branch"
+    git commit -asm "Add extras for ${description}" && "${GITPUSH[@]}"
+    git add vendor/
+    git commit -asm "Add vendor for ${description}" && "${GITPUSH[@]}"
+    git add system/system/app/ || git add system/app/
+    git commit -asm "Add system app for ${description}" && "${GITPUSH[@]}"
+    git add system/system/priv-app/ || git add system/priv-app/
+    git commit -asm "Add system priv-app for ${description}" && "${GITPUSH[@]}"
+    git add system/
+    git commit -asm "Add system for ${description}" && "${GITPUSH[@]}"
+    git add product/app/
+    git commit -asm "Add product app for ${description}" && "${GITPUSH[@]}"
+    git add product/priv-app/
+    git commit -asm "Add product priv-app for ${description}" && "${GITPUSH[@]}"
+    git add product/
+    git commit -asm "Add product for ${description}" && "${GITPUSH[@]}"
 else
     echo "Dump done locally."
     exit 1
