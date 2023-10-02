@@ -117,22 +117,23 @@ done
 # extract PARTITIONS
 cd "$PROJECT_DIR"/working/"${UNZIP_DIR}" || exit
 for p in $PARTITIONS; do
-    if [[ -e "$p.img" ]]; then
-        mkdir "$p" 2> /dev/null || rm -rf "${p:?}"/*
-        echo "Extracting $p partition"
-        7z x "$p".img -y -o"$p"/ > /dev/null 2>&1
-        if [ $? -eq 0 ]; then
+    # Try to extract images via fsck.erofs
+    if [ -f $p.img ] && [ $p != "modem" ]; then
+        echo "Trying to extract $p partition via fsck.erofs."
+        "$PROJECT_DIR"/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img
+        # Deletes images if they were correctly extracted via fsck.erofs
+        if [ -d "$p" ]; then
             rm "$p".img > /dev/null 2>&1
         else
-        #handling erofs images, which can't be handled by 7z
-            if [ -f $p.img ] && [ $p != "modem" ]; then
-                echo "Couldn't extract $p partition by 7z. Using fsck.erofs."
-                rm -rf "${p}"/*
-                "$PROJECT_DIR"/Firmware_extractor/tools/Linux/bin/fsck.erofs --extract="$p" "$p".img
+        # Uses 7z if images could not be extracted via fsck.erofs
+            if [[ -e "$p.img" ]]; then
+                mkdir "$p" 2> /dev/null || rm -rf "${p:?}"/*
+                echo "Extraction via fsck.erofs failed, extracting $p partition via 7z"
+                7z x "$p".img -y -o"$p"/ > /dev/null 2>&1
                 if [ $? -eq 0 ]; then
-                    rm -fv "$p".img > /dev/null 2>&1
+                    rm "$p".img > /dev/null 2>&1
                 else
-                    echo "Couldn't extract $p partition by fsck.erofs. Using mount loop"
+                    echo "Couldn't extract $p partition via 7z. Using mount loop"
                     $sudo_cmd mount -o loop -t auto "$p".img "$p"
                     mkdir "${p}_"
                     $sudo_cmd cp -rf "${p}/"* "${p}_"
@@ -224,17 +225,14 @@ manufacturer=$(echo "$manufacturer" | tr '[:upper:]' '[:lower:]' | tr -dc '[:pri
 printf "# %s\n- manufacturer: %s\n- platform: %s\n- codename: %s\n- flavor: %s\n- release: %s\n- id: %s\n- incremental: %s\n- tags: %s\n- fingerprint: %s\n- is_ab: %s\n- brand: %s\n- branch: %s\n- repo: %s\n" "$description" "$manufacturer" "$platform" "$codename" "$flavor" "$release" "$id" "$incremental" "$tags" "$fingerprint" "$is_ab" "$brand" "$branch" "$repo" > "$PROJECT_DIR"/working/"${UNZIP_DIR}"/README.md
 cat "$PROJECT_DIR"/working/"${UNZIP_DIR}"/README.md
 
-# create TWRP device tree if possible
-if [[ "$is_ab" = true ]]; then
-    twrpimg="$PROJECT_DIR"/working/"${UNZIP_DIR}"/"boot.img"
-else
-    twrpimg="$PROJECT_DIR"/working/"${UNZIP_DIR}"/"recovery.img"
-fi
-if [[ -f "${twrpimg}" ]]; then
-    twrpdt="$PROJECT_DIR"/working/"${UNZIP_DIR}"/twrp-device-tree
-    python3 -m twrpdtgen "$twrpimg" --output "$twrpdt"
-    if [[ "$?" = 0 ]]; then
-        [[ ! -e "$twrpdt"/README.md ]] && curl https://raw.githubusercontent.com/wiki/SebaUbuntu/TWRP-device-tree-generator/4.-Build-TWRP-from-source.md > "$twrpdt"/README.md
+# Generate AOSP device tree
+if python3 -c "import aospdtgen"; then
+    echo "aospdtgen installed, generating device tree"
+    mkdir -p "${PROJECT_DIR}/working/${UNZIP_DIR}/aosp-device-tree"
+    if python3 -m aospdtgen . --output "${PROJECT_DIR}/working/${UNZIP_DIR}/aosp-device-tree"; then
+        echo "AOSP device tree successfully generated"
+    else
+        echo "Failed to generate AOSP device tree"
     fi
 fi
 
